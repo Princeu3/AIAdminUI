@@ -32,6 +32,21 @@ If the user rejects or modifies the plan, adjust accordingly.
 
 Remember: In plan mode, ALWAYS plan first, then wait for explicit approval before making any changes."""
 
+# Pre-approved tools for sandboxed sessions
+# Using --allowedTools flag instead of --permission-mode to avoid root user restrictions
+ALLOWED_TOOLS = [
+    "Bash(*)",      # All bash commands (git, npm, etc.)
+    "Edit(*)",      # All file edits
+    "Write(*)",     # All file writes
+    "Read(*)",      # All file reads
+    "Glob(*)",      # File pattern matching
+    "Grep(*)",      # Content search
+    "WebFetch(*)",  # Web requests
+    "TodoWrite",    # Task management
+    "Task(*)",      # Subagent tasks
+    "NotebookEdit(*)",  # Jupyter notebook edits
+]
+
 
 @dataclass
 class ClaudeSession:
@@ -126,8 +141,9 @@ class ClaudeService:
             effective_message = f"{PLAN_MODE_PROMPT}\n\n---\n\nUser request: {message}"
 
         # Build command based on whether this is first message or follow-up
-        # Permissions are handled by settings.json (created in init-claude.sh)
-        # Only use --permission-mode flag for plan mode
+        # Use --allowedTools to pre-approve tools (avoids root user permission issues)
+        allowed_tools_str = " ".join(ALLOWED_TOOLS)
+
         if session.message_count == 0:
             # First message - use --session-id to create new session
             cmd = [
@@ -135,6 +151,7 @@ class ClaudeService:
                 "-p", effective_message,
                 "--session-id", session.claude_session_id,
                 "--output-format", "text",
+                "--allowedTools", allowed_tools_str,
             ]
         else:
             # Follow-up message - use --resume to continue session
@@ -143,6 +160,7 @@ class ClaudeService:
                 "-p", effective_message,
                 "--resume", session.claude_session_id,
                 "--output-format", "text",
+                "--allowedTools", allowed_tools_str,
             ]
 
         # Add plan mode flag if in plan mode
@@ -214,8 +232,9 @@ class ClaudeService:
 
         # Build command with stream-json output
         # Note: --verbose is required when using stream-json with -p
-        # Permissions are handled by settings.json (created in init-claude.sh)
-        # Only use --permission-mode flag for plan mode
+        # Use --allowedTools to pre-approve tools (avoids root user permission issues)
+        allowed_tools_str = " ".join(ALLOWED_TOOLS)
+
         if session.message_count == 0:
             cmd = [
                 "claude",
@@ -223,6 +242,7 @@ class ClaudeService:
                 "--session-id", session.claude_session_id,
                 "--output-format", "stream-json",
                 "--verbose",
+                "--allowedTools", allowed_tools_str,
             ]
         else:
             cmd = [
@@ -231,6 +251,7 @@ class ClaudeService:
                 "--resume", session.claude_session_id,
                 "--output-format", "stream-json",
                 "--verbose",
+                "--allowedTools", allowed_tools_str,
             ]
 
         # Add plan mode flag if in plan mode
