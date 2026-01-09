@@ -126,9 +126,8 @@ class ClaudeService:
             effective_message = f"{PLAN_MODE_PROMPT}\n\n---\n\nUser request: {message}"
 
         # Build command based on whether this is first message or follow-up
-        # Use "plan" permission mode in plan mode, otherwise "acceptEdits" for sandboxed environment
-        permission_mode = "plan" if mode == "plan" else "bypassPermissions"
-
+        # Permissions are handled by settings.json (created in init-claude.sh)
+        # Only use --permission-mode flag for plan mode
         if session.message_count == 0:
             # First message - use --session-id to create new session
             cmd = [
@@ -136,7 +135,6 @@ class ClaudeService:
                 "-p", effective_message,
                 "--session-id", session.claude_session_id,
                 "--output-format", "text",
-                "--permission-mode", permission_mode,
             ]
         else:
             # Follow-up message - use --resume to continue session
@@ -145,8 +143,11 @@ class ClaudeService:
                 "-p", effective_message,
                 "--resume", session.claude_session_id,
                 "--output-format", "text",
-                "--permission-mode", permission_mode,
             ]
+
+        # Add plan mode flag if in plan mode
+        if mode == "plan":
+            cmd.extend(["--permission-mode", "plan"])
 
         # Run Claude and capture output
         process = await asyncio.create_subprocess_exec(
@@ -213,9 +214,8 @@ class ClaudeService:
 
         # Build command with stream-json output
         # Note: --verbose is required when using stream-json with -p
-        # Use "plan" permission mode in plan mode, otherwise "acceptEdits" for sandboxed environment
-        permission_mode = "plan" if mode == "plan" else "bypassPermissions"
-
+        # Permissions are handled by settings.json (created in init-claude.sh)
+        # Only use --permission-mode flag for plan mode
         if session.message_count == 0:
             cmd = [
                 "claude",
@@ -223,7 +223,6 @@ class ClaudeService:
                 "--session-id", session.claude_session_id,
                 "--output-format", "stream-json",
                 "--verbose",
-                "--permission-mode", permission_mode,
             ]
         else:
             cmd = [
@@ -232,8 +231,11 @@ class ClaudeService:
                 "--resume", session.claude_session_id,
                 "--output-format", "stream-json",
                 "--verbose",
-                "--permission-mode", permission_mode,
             ]
+
+        # Add plan mode flag if in plan mode
+        if mode == "plan":
+            cmd.extend(["--permission-mode", "plan"])
 
         # Run Claude and stream output
         process = await asyncio.create_subprocess_exec(
