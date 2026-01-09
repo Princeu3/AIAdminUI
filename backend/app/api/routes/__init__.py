@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.routes import auth, repos, sessions, health, mcp
+from app.api.routes import auth, repos, sessions, health, mcp, credentials
 
 api_router = APIRouter()
 
@@ -9,3 +9,4 @@ api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(repos.router, prefix="/repos", tags=["repos"])
 api_router.include_router(sessions.router, prefix="/sessions", tags=["sessions"])
 api_router.include_router(mcp.router, tags=["mcp"])
+api_router.include_router(credentials.router, tags=["credentials"])

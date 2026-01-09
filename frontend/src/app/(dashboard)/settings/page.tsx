@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { MCPSettings } from '@/components/settings/MCPSettings';
+import { ClaudeCredentials } from '@/components/settings/ClaudeCredentials';
 import { Github, Sparkles, CheckCircle, Info } from 'lucide-react';
 
 export default function SettingsPage() {
@@ -52,37 +53,10 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      {/* Claude Status */}
-      <Card className="mb-6">
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Sparkles className="h-6 w-6 text-orange-500" />
-              <div>
-                <CardTitle className="text-lg">Claude Code</CardTitle>
-                <CardDescription>
-                  AI-powered code assistance
-                </CardDescription>
-              </div>
-            </div>
-            <Badge variant="default" className="bg-green-100 text-green-700">
-              <CheckCircle className="h-3 w-3 mr-1" />
-              Ready
-            </Badge>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="p-4 bg-blue-50 border border-blue-100 rounded-lg flex gap-3">
-            <Info className="h-5 w-5 text-blue-500 flex-shrink-0 mt-0.5" />
-            <div>
-              <p className="text-sm text-blue-800">
-                Claude Code is configured on the server and ready to use.
-                Your AI sessions use the server's Claude Max subscription.
-              </p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      {/* Claude Credentials */}
+      <div className="mb-6">
+        <ClaudeCredentials />
+      </div>
 
       {/* MCP Settings */}
       <div className="mb-6">

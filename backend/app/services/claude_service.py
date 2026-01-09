@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import uuid
+import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Literal, Optional, Set
@@ -12,6 +13,7 @@ from app.services.permission_service import (
     ToolType,
     PermissionScope,
 )
+from app.api.routes.credentials import get_user_credentials
 
 # Plan mode system prompt
 PLAN_MODE_PROMPT = """You are in PLAN MODE. Before taking any actions:
@@ -73,6 +75,45 @@ class ClaudeService:
 
     def __init__(self):
         self.sessions: dict[str, ClaudeSession] = {}
+        self._credential_dirs: dict[str, str] = {}  # session_id -> credential dir path
+
+    async def _setup_user_credentials(self, session: ClaudeSession) -> dict[str, str]:
+        """
+        Set up user-specific Claude credentials for a session.
+
+        Returns environment variables to pass to Claude CLI, or empty dict
+        if user has no custom credentials (falls back to server default).
+        """
+        credentials_json = await get_user_credentials(session.user_id)
+
+        if not credentials_json:
+            return {}  # No custom credentials, use server default
+
+        # Create session-specific .claude directory
+        claude_dir = os.path.join(session.working_dir, ".claude-config")
+        os.makedirs(claude_dir, exist_ok=True)
+
+        # Write credentials file with restricted permissions
+        creds_path = os.path.join(claude_dir, ".credentials.json")
+        with open(creds_path, "w") as f:
+            f.write(credentials_json)
+        os.chmod(creds_path, 0o600)
+
+        # Store for cleanup later
+        self._credential_dirs[session.session_id] = claude_dir
+
+        # Return env var to use this config directory
+        return {"CLAUDE_CONFIG_DIR": claude_dir}
+
+    def _cleanup_credentials(self, session_id: str):
+        """Clean up temporary credential files for a session."""
+        if session_id in self._credential_dirs:
+            claude_dir = self._credential_dirs[session_id]
+            try:
+                shutil.rmtree(claude_dir)
+            except Exception:
+                pass  # Best effort cleanup
+            del self._credential_dirs[session_id]
 
     async def create_session(
         self,
@@ -167,10 +208,16 @@ class ClaudeService:
         if mode == "plan":
             cmd.extend(["--permission-mode", "plan"])
 
+        # Set up user-specific credentials if available
+        env = os.environ.copy()
+        user_env = await self._setup_user_credentials(session)
+        env.update(user_env)
+
         # Run Claude and capture output
         process = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=session.working_dir,
+            env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -258,10 +305,16 @@ class ClaudeService:
         if mode == "plan":
             cmd.extend(["--permission-mode", "plan"])
 
+        # Set up user-specific credentials if available
+        env = os.environ.copy()
+        user_env = await self._setup_user_credentials(session)
+        env.update(user_env)
+
         # Run Claude and stream output
         process = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=session.working_dir,
+            env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -400,10 +453,12 @@ class ClaudeService:
         ]
 
     async def terminate_session(self, session_id: str):
-        """Terminate a session."""
+        """Terminate a session and clean up resources."""
         session = self.sessions.get(session_id)
         if session:
             session.is_active = False
+            # Clean up user credential files
+            self._cleanup_credentials(session_id)
 
     def subscribe(self, session_id: str, callback: Callable):
         """Subscribe to session responses."""
