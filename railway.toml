@@ -1,0 +1,10 @@
+# Railway Deployment Configuration
+# Note: Service-specific settings (like root directory) must be configured in Railway dashboard
+
+# Common build settings - each service overrides dockerfilePath via service variables
+[build]
+builder = "dockerfile"
+
+[deploy]
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
