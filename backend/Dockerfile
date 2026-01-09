@@ -35,8 +35,7 @@ RUN chmod +x /init-claude.sh
 # Create directories
 RUN mkdir -p /app/repos /app/data /root/.claude
 
-# Environment variables for unattended operation
-ENV CLAUDE_CODE_BYPASS_ALL_PERMISSIONS=1
+# Environment variables
 ENV REPOS_BASE_PATH=/app/repos
 ENV PATH="/root/.npm-global/bin:$PATH"
 

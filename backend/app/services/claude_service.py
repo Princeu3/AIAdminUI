@@ -95,7 +95,6 @@ class ClaudeService:
                 "-p", message,
                 "--session-id", session.claude_session_id,
                 "--output-format", "text",
-                "--dangerously-skip-permissions",  # Required for unattended/Docker operation
             ]
         else:
             # Follow-up message - use --resume to continue session
@@ -104,7 +103,6 @@ class ClaudeService:
                 "-p", message,
                 "--resume", session.claude_session_id,
                 "--output-format", "text",
-                "--dangerously-skip-permissions",  # Required for unattended/Docker operation
             ]
 
         # Run Claude and capture output
