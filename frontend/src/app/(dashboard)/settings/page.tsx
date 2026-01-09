@@ -4,6 +4,7 @@ import { useAuthStore } from '@/stores/auth';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { MCPSettings } from '@/components/settings/MCPSettings';
 import { Github, Sparkles, CheckCircle, Info } from 'lucide-react';
 
 export default function SettingsPage() {
@@ -52,7 +53,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* Claude Status */}
-      <Card>
+      <Card className="mb-6">
         <CardHeader>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -82,6 +83,11 @@ export default function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* MCP Settings */}
+      <div className="mb-6">
+        <MCPSettings />
+      </div>
 
       {/* Info Section */}
       <div className="mt-8 p-4 bg-gray-50 rounded-lg">

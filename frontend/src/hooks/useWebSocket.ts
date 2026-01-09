@@ -2,24 +2,64 @@
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useSessionStore } from '@/stores/session';
+import { usePermissionStore, type ToolType, type PermissionScope } from '@/stores/permissions';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
 
 interface Message {
   id: string;
-  type: 'user' | 'assistant' | 'system' | 'error';
+  type: 'user' | 'assistant' | 'system' | 'error' | 'command_result';
   content: string;
   timestamp: Date;
+  data?: Record<string, unknown>;
+  toolUses?: ToolUseInfo[];
+}
+
+interface ToolUseInfo {
+  id: string;
+  name: string;
+  status: 'running' | 'completed';
+}
+
+interface CommandResult {
+  command: string;
+  success: boolean;
+  content: string;
+  data?: Record<string, unknown>;
+}
+
+/**
+ * Map tool names from Claude CLI to our ToolType enum
+ */
+function mapToolName(name: string): ToolType {
+  const mapping: Record<string, ToolType> = {
+    read: 'read',
+    Read: 'read',
+    write: 'write',
+    Write: 'write',
+    edit: 'write',
+    Edit: 'write',
+    bash: 'bash',
+    Bash: 'bash',
+    browser: 'browser',
+    Browser: 'browser',
+    WebFetch: 'browser',
+    WebSearch: 'browser',
+  };
+  return mapping[name] || 'mcp';
 }
 
 export function useWebSocket(sessionId: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttempts = useRef(0);
+  const streamingContentRef = useRef<string>('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isTyping, setIsTyping] = useState(false);
   const [workingDir, setWorkingDir] = useState<string>('');
+  const [activeToolUses, setActiveToolUses] = useState<ToolUseInfo[]>([]);
 
   const { setConnectionStatus } = useSessionStore();
+  const { addRequest, addToolUse, updateToolUse } = usePermissionStore();
 
   const addMessage = useCallback((message: Omit<Message, 'id' | 'timestamp'>) => {
     setMessages((prev) => [
@@ -82,6 +122,67 @@ export function useWebSocket(sessionId: string | null) {
             });
             break;
 
+          case 'command_result':
+            addMessage({
+              type: 'command_result',
+              content: data.content,
+              data: data.data,
+            });
+            break;
+
+          case 'command_error':
+            addMessage({
+              type: 'error',
+              content: `Command error: ${data.error}`,
+            });
+            break;
+
+          case 'text_delta':
+            // Streaming text chunk - append to streaming content
+            streamingContentRef.current += data.content || '';
+            break;
+
+          case 'tool_use':
+            // Tool use status update
+            {
+              const toolInfo: ToolUseInfo = {
+                id: data.tool_id,
+                name: data.tool_name,
+                status: data.status,
+              };
+
+              if (data.status === 'running') {
+                setActiveToolUses((prev) => [...prev, toolInfo]);
+                // Add to tool use store
+                addToolUse({
+                  id: data.tool_id,
+                  tool: mapToolName(data.tool_name),
+                  status: 'running',
+                  description: `Running ${data.tool_name}`,
+                });
+              } else if (data.status === 'completed') {
+                setActiveToolUses((prev) =>
+                  prev.map((t) =>
+                    t.id === data.tool_id ? { ...t, status: 'completed' } : t
+                  )
+                );
+                updateToolUse(data.tool_id, { status: 'completed' });
+              }
+            }
+            break;
+
+          case 'permission_request':
+            // Permission request from backend
+            addRequest({
+              id: data.request_id,
+              tool: mapToolName(data.tool),
+              path: data.path,
+              command: data.command,
+              description: data.description,
+              timestamp: new Date(),
+            });
+            break;
+
           case 'pong':
             // Heartbeat response - ignore
             break;
@@ -120,7 +221,7 @@ export function useWebSocket(sessionId: string | null) {
     }
   }, []);
 
-  const sendMessage = useCallback((content: string) => {
+  const sendMessage = useCallback((content: string, mode: 'normal' | 'plan' = 'normal') => {
     if (!content.trim()) return;
 
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -130,15 +231,50 @@ export function useWebSocket(sessionId: string | null) {
         content: content.trim(),
       });
 
-      // Send to server
+      // Send to server with mode
       wsRef.current.send(
         JSON.stringify({
           type: 'message',
           content: content.trim(),
+          mode,
         })
       );
     }
   }, [addMessage]);
+
+  const sendCommand = useCallback((command: string, args: string[] = []) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      // Add system message showing command was executed
+      addMessage({
+        type: 'system',
+        content: `Running /${command}...`,
+      });
+
+      wsRef.current.send(
+        JSON.stringify({
+          type: 'command',
+          command,
+          args,
+        })
+      );
+    }
+  }, [addMessage]);
+
+  const sendPermissionResponse = useCallback(
+    (requestId: string, allowed: boolean, scope: PermissionScope) => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: 'permission_response',
+            request_id: requestId,
+            allowed,
+            scope,
+          })
+        );
+      }
+    },
+    []
+  );
 
   const sendPing = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -170,9 +306,16 @@ export function useWebSocket(sessionId: string | null) {
     messages,
     isTyping,
     workingDir,
+    activeToolUses,
     sendMessage,
+    sendCommand,
+    sendPermissionResponse,
     connect,
     disconnect,
-    clearMessages: () => setMessages([]),
+    clearMessages: () => {
+      setMessages([]);
+      setActiveToolUses([]);
+      streamingContentRef.current = '';
+    },
   };
 }

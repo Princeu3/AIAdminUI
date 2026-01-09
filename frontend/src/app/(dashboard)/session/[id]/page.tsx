@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth';
 import { useRepositoryStore } from '@/stores/repository';
 import { useSessionStore } from '@/stores/session';
+import { useModeStore } from '@/stores/mode';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { sessionsApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -12,6 +13,21 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
+import { SlashCommandMenu } from '@/components/chat/SlashCommandMenu';
+import { CommandPalette, useCommandPaletteShortcut } from '@/components/chat/CommandPalette';
+import { ModeIndicator } from '@/components/chat/ModeIndicator';
+import { PlanPanel } from '@/components/chat/PlanPanel';
+import { PermissionDialog, usePermissionDialog } from '@/components/chat/PermissionDialog';
+import { ToolUseList } from '@/components/chat/ToolUseDisplay';
+import { usePermissionStore } from '@/stores/permissions';
+import {
+  isSlashCommandInput,
+  getCommandPrefix,
+  parseSlashCommand,
+  findCommand,
+  generateHelpText,
+  type SlashCommand,
+} from '@/lib/commands';
 import {
   Send,
   Square,
@@ -21,6 +37,8 @@ import {
   ArrowLeft,
   Loader2,
   AlertCircle,
+  Terminal,
+  Command,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -32,15 +50,59 @@ export default function SessionPage() {
   const { user } = useAuthStore();
   const { selectedRepo } = useRepositoryStore();
   const { connectionStatus } = useSessionStore();
+  const { mode, toggleMode } = useModeStore();
 
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+  const [showSlashMenu, setShowSlashMenu] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const { messages, isTyping, workingDir, sendMessage } = useWebSocket(sessionId);
+  const {
+    messages,
+    isTyping,
+    workingDir,
+    activeToolUses,
+    sendMessage,
+    sendCommand,
+    sendPermissionResponse,
+    clearMessages,
+  } = useWebSocket(sessionId);
+
+  // Permission dialog hook
+  const { currentRequest, handleRespond, hasPendingRequests } = usePermissionDialog();
+  const { toolUses } = usePermissionStore();
+
+  // Handle permission response - update local store and send to backend
+  const onPermissionRespond = useCallback(
+    (requestId: string, allowed: boolean, scope: 'once' | 'session' | 'always') => {
+      handleRespond(requestId, allowed, scope);
+      sendPermissionResponse(requestId, allowed, scope);
+    },
+    [handleRespond, sendPermissionResponse]
+  );
+
+  // Command palette keyboard shortcut
+  useCommandPaletteShortcut(
+    () => setCommandPaletteOpen(true),
+    connectionStatus === 'connected'
+  );
+
+  // Plan mode toggle shortcut (Shift+Tab like Claude Code)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.shiftKey && e.key === 'Tab') {
+        e.preventDefault();
+        toggleMode();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [toggleMode]);
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
@@ -66,17 +128,84 @@ export default function SessionPage() {
     }
   };
 
+  // Execute a command (either from menu or parsed from input)
+  const executeCommand = useCallback((command: SlashCommand, args: string[] = []) => {
+    setShowSlashMenu(false);
+    setInputValue('');
+
+    if (command.handler === 'frontend') {
+      // Handle frontend commands locally
+      switch (command.name) {
+        case 'help':
+          // Add help text as system message by sending to chat
+          sendMessage(generateHelpText());
+          break;
+        case 'clear':
+          clearMessages();
+          break;
+        case 'plan':
+          toggleMode();
+          break;
+        case 'settings':
+          router.push('/settings');
+          break;
+        default:
+          sendMessage(`Unknown frontend command: /${command.name}`);
+      }
+    } else {
+      // Send to backend
+      sendCommand(command.name, args);
+    }
+
+    inputRef.current?.focus();
+  }, [sendMessage, sendCommand, clearMessages, router]);
+
+  // Handle selecting a command from the menu
+  const handleSelectCommand = useCallback((command: SlashCommand) => {
+    executeCommand(command);
+  }, [executeCommand]);
+
   const handleSend = useCallback(() => {
     if (!inputValue.trim()) return;
-    sendMessage(inputValue);
+
+    // Check if input is a slash command
+    const parsed = parseSlashCommand(inputValue);
+    if (parsed) {
+      const command = findCommand(parsed.command);
+      if (command) {
+        executeCommand(command, parsed.args);
+        return;
+      }
+      // Unknown command - send as regular message
+    }
+
+    // Send as regular message with current mode
+    sendMessage(inputValue, mode);
     setInputValue('');
+    setShowSlashMenu(false);
     inputRef.current?.focus();
-  }, [inputValue, sendMessage]);
+  }, [inputValue, sendMessage, executeCommand, mode]);
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setInputValue(value);
+
+    // Show slash menu when typing /
+    if (isSlashCommandInput(value)) {
+      setShowSlashMenu(true);
+    } else {
+      setShowSlashMenu(false);
+    }
+  };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
+    }
+    // Close slash menu on escape
+    if (e.key === 'Escape' && showSlashMenu) {
+      setShowSlashMenu(false);
     }
   };
 
@@ -119,7 +248,9 @@ export default function SessionPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            <ModeIndicator />
+            <Separator orientation="vertical" className="h-6" />
             <Badge
               variant={connectionStatus === 'connected' ? 'default' : 'destructive'}
               className={
@@ -149,13 +280,23 @@ export default function SessionPage() {
       </div>
 
       {/* Chat Area */}
-      <div className="flex-1 flex flex-col min-h-0">
+      <div className="flex-1 flex min-h-0">
         {/* Messages */}
-        <ScrollArea className="flex-1" ref={scrollRef}>
+        <div className="flex-1 flex flex-col min-h-0">
+          <ScrollArea className="flex-1" ref={scrollRef}>
           <div className="container mx-auto max-w-3xl space-y-4 p-4">
             {messages.map((message) => (
               <MessageBubble key={message.id} message={message} />
             ))}
+
+            {/* Active Tool Uses */}
+            {activeToolUses.length > 0 && (
+              <div className="flex justify-start">
+                <div className="max-w-[80%]">
+                  <ToolUseList toolUses={toolUses.filter(t => activeToolUses.some(a => a.id === t.id))} />
+                </div>
+              </div>
+            )}
 
             {/* Typing indicator */}
             {isTyping && (
@@ -177,16 +318,34 @@ export default function SessionPage() {
         {/* Input Area */}
         <div className="border-t bg-white p-4 shrink-0">
           <div className="container mx-auto max-w-3xl">
-            <div className="flex gap-2">
+            <div className="relative flex gap-2">
+              {/* Slash Command Menu */}
+              {showSlashMenu && (
+                <SlashCommandMenu
+                  prefix={getCommandPrefix(inputValue) || ''}
+                  onSelect={handleSelectCommand}
+                  onClose={() => setShowSlashMenu(false)}
+                />
+              )}
+
               <Input
                 ref={inputRef}
                 value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
+                onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
-                placeholder="Ask Claude to make changes..."
+                placeholder="Ask Claude or type / for commands..."
                 className="flex-1"
                 disabled={connectionStatus !== 'connected' || isTyping}
               />
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setCommandPaletteOpen(true)}
+                disabled={connectionStatus !== 'connected'}
+                title="Command Palette (Cmd+K)"
+              >
+                <Command className="h-4 w-4" />
+              </Button>
               <Button
                 onClick={handleSend}
                 disabled={!inputValue.trim() || connectionStatus !== 'connected' || isTyping}
@@ -195,11 +354,28 @@ export default function SessionPage() {
               </Button>
             </div>
             <p className="text-xs text-gray-400 mt-2">
-              Press Enter to send. Try: "Change the hero text to 'Build Faster'"
+              Enter to send | / for commands | <kbd className="px-1 py-0.5 bg-gray-100 rounded text-gray-600">Cmd+K</kbd> palette | <kbd className="px-1 py-0.5 bg-gray-100 rounded text-gray-600">Shift+Tab</kbd> plan mode
             </p>
           </div>
         </div>
+        </div>
+
+        {/* Plan Panel (shown in plan mode) */}
+        <PlanPanel />
       </div>
+
+      {/* Command Palette */}
+      <CommandPalette
+        open={commandPaletteOpen}
+        onOpenChange={setCommandPaletteOpen}
+        onSelectCommand={handleSelectCommand}
+      />
+
+      {/* Permission Dialog */}
+      <PermissionDialog
+        request={currentRequest}
+        onRespond={onPermissionRespond}
+      />
     </div>
   );
 }
@@ -207,9 +383,10 @@ export default function SessionPage() {
 interface MessageProps {
   message: {
     id: string;
-    type: 'user' | 'assistant' | 'system' | 'error';
+    type: 'user' | 'assistant' | 'system' | 'error' | 'command_result';
     content: string;
     timestamp: Date;
+    data?: Record<string, unknown>;
   };
 }
 
@@ -234,6 +411,27 @@ function MessageBubble({ message }: MessageProps) {
               <p className="font-medium">Error</p>
               <p className="text-sm mt-1">{message.content}</p>
             </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (message.type === 'command_result') {
+    return (
+      <div className="flex justify-start">
+        <div className="bg-blue-50 border border-blue-200 text-blue-900 rounded-lg p-4 max-w-[80%]">
+          <div className="flex items-start gap-2">
+            <Terminal className="h-5 w-5 flex-shrink-0 mt-0.5 text-blue-500" />
+            <div className="flex-1 min-w-0">
+              <p className="font-medium text-blue-700 text-sm">Command Result</p>
+              <pre className="text-sm mt-2 whitespace-pre-wrap font-mono bg-blue-100 p-2 rounded overflow-x-auto">
+                {message.content}
+              </pre>
+            </div>
+          </div>
+          <div className="text-xs mt-2 text-blue-400">
+            {message.timestamp.toLocaleTimeString()}
           </div>
         </div>
       </div>

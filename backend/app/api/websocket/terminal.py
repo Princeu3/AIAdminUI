@@ -3,6 +3,7 @@ import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.services.claude_service import claude_service
+from app.services.permission_service import permission_service, PermissionScope
 
 router = APIRouter()
 
@@ -13,6 +14,7 @@ class ChatConnection:
     def __init__(self, websocket: WebSocket, session_id: str):
         self.websocket = websocket
         self.session_id = session_id
+        self.use_streaming = True  # Use streaming by default
 
     async def send_response(self, response: str):
         """Send Claude response to WebSocket client."""
@@ -24,10 +26,59 @@ class ChatConnection:
         except Exception:
             pass
 
+    async def send_event(self, event: dict):
+        """Send a streaming event to WebSocket client."""
+        try:
+            await self.websocket.send_json(event)
+        except Exception:
+            pass
+
+    async def handle_stream_event(self, event: dict):
+        """Handle streaming events from Claude and forward to client."""
+        event_type = event.get("type")
+
+        if event_type == "text_delta":
+            await self.websocket.send_json({
+                "type": "text_delta",
+                "content": event.get("content", ""),
+            })
+
+        elif event_type == "tool_use_start":
+            await self.websocket.send_json({
+                "type": "tool_use",
+                "status": "running",
+                "tool_id": event.get("tool_id"),
+                "tool_name": event.get("tool_name"),
+            })
+
+        elif event_type == "tool_use_end":
+            await self.websocket.send_json({
+                "type": "tool_use",
+                "status": "completed",
+                "tool_id": event.get("tool_id"),
+                "tool_name": event.get("tool_name"),
+            })
+
+        elif event_type == "complete":
+            await self.websocket.send_json({
+                "type": "response",
+                "content": event.get("content", ""),
+                "tool_uses": event.get("tool_uses", []),
+            })
+
+        elif event_type == "error":
+            await self.websocket.send_json({
+                "type": "error",
+                "content": event.get("content", "Unknown error"),
+            })
+
     async def handle(self):
         """Main WebSocket handling loop."""
         # Subscribe to Claude responses
         claude_service.subscribe(self.session_id, self.send_response)
+
+        # Register permission callback
+        permission_service.register_callback(self.session_id, self.send_event)
 
         try:
             # Handle incoming messages
@@ -46,6 +97,12 @@ class ChatConnection:
                 if msg_type == "message":
                     await self._handle_user_message(data)
 
+                elif msg_type == "command":
+                    await self._handle_command(data)
+
+                elif msg_type == "permission_response":
+                    await self._handle_permission_response(data)
+
                 elif msg_type == "ping":
                     await self.websocket.send_json({"type": "pong"})
 
@@ -53,10 +110,13 @@ class ChatConnection:
             pass
         finally:
             claude_service.unsubscribe(self.session_id, self.send_response)
+            permission_service.unregister_callback(self.session_id)
 
     async def _handle_user_message(self, data: dict):
         """Handle user message - send to Claude and return response."""
         content = data.get("content", "").strip()
+        mode = data.get("mode", "normal")
+        use_streaming = data.get("streaming", self.use_streaming)
 
         if not content:
             await self.websocket.send_json({
@@ -69,11 +129,21 @@ class ChatConnection:
         await self.websocket.send_json({"type": "typing", "status": True})
 
         try:
-            # Send message to Claude (response is sent via subscriber callback)
-            await claude_service.send_message(
-                self.session_id,
-                content
-            )
+            if use_streaming:
+                # Use streaming method with event callbacks
+                await claude_service.send_message_streaming(
+                    self.session_id,
+                    content,
+                    mode=mode,
+                    event_callback=self.handle_stream_event,
+                )
+            else:
+                # Use non-streaming method (response via subscriber callback)
+                await claude_service.send_message(
+                    self.session_id,
+                    content,
+                    mode=mode
+                )
 
         except ValueError as e:
             await self.websocket.send_json({
@@ -96,6 +166,72 @@ class ChatConnection:
         finally:
             # Clear typing indicator
             await self.websocket.send_json({"type": "typing", "status": False})
+
+    async def _handle_command(self, data: dict):
+        """Handle slash command execution."""
+        command = data.get("command", "").strip()
+        args = data.get("args", [])
+
+        if not command:
+            await self.websocket.send_json({
+                "type": "command_error",
+                "command": "",
+                "error": "Empty command"
+            })
+            return
+
+        try:
+            result = await claude_service.execute_command(
+                self.session_id,
+                command,
+                args
+            )
+
+            if result.get("success"):
+                await self.websocket.send_json({
+                    "type": "command_result",
+                    "command": command,
+                    "success": True,
+                    "content": result.get("content", ""),
+                    "data": result.get("data")
+                })
+            else:
+                await self.websocket.send_json({
+                    "type": "command_error",
+                    "command": command,
+                    "error": result.get("content", "Command failed")
+                })
+
+        except Exception as e:
+            await self.websocket.send_json({
+                "type": "command_error",
+                "command": command,
+                "error": str(e)
+            })
+
+    async def _handle_permission_response(self, data: dict):
+        """Handle permission response from client."""
+        request_id = data.get("request_id")
+        allowed = data.get("allowed", False)
+        scope = data.get("scope", "once")
+
+        if not request_id:
+            await self.websocket.send_json({
+                "type": "error",
+                "content": "Missing request_id in permission response"
+            })
+            return
+
+        # Map scope string to enum
+        scope_map = {
+            "once": PermissionScope.ONCE,
+            "session": PermissionScope.SESSION,
+            "always": PermissionScope.ALWAYS,
+        }
+        permission_scope = scope_map.get(scope, PermissionScope.ONCE)
+
+        # Resolve the permission request
+        permission_service.resolve_permission(request_id, allowed, permission_scope)
 
 
 @router.websocket("/ws/chat/{session_id}")
