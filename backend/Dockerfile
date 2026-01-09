@@ -19,17 +19,17 @@ RUN pip install uv
 WORKDIR /app
 
 # Copy dependency files first (for layer caching)
-COPY backend/pyproject.toml backend/uv.lock* ./
+COPY pyproject.toml uv.lock* ./
 
 # Install Python dependencies
 RUN uv sync --frozen --no-dev || uv sync --no-dev
 
 # Copy application code
-COPY backend/app ./app
-COPY backend/scripts ./scripts
+COPY app ./app
+COPY scripts ./scripts
 
 # Copy init script
-COPY backend/scripts/init-claude.sh /init-claude.sh
+COPY scripts/init-claude.sh /init-claude.sh
 RUN chmod +x /init-claude.sh
 
 # Create directories
