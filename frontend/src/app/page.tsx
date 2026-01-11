@@ -177,6 +177,8 @@ function LandingContent() {
       {/* Footer */}
       <footer className="container mx-auto px-4 py-8 mt-20 border-t">
         <div className="flex items-center justify-center gap-2 text-gray-500">
+          <span>Made by Prince</span>
+          <span>•</span>
           <Sparkles className="h-4 w-4" />
           <span>Powered by Claude Code</span>
         </div>
